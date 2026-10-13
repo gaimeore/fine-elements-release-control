@@ -38,10 +38,11 @@ describe('sandbox vectors', () => {
     const args = buildArgs();
     assert.doesNotThrow(() => assertSandboxInvariants(args, 'build'));
     const joined = args.join(' ');
-    for (const needle of ['--network none', '--user 10001:10001', '--cap-drop ALL', '--security-opt no-new-privileges:true', '--read-only', '--pid private', '--ipc private', '--uts private', '--cgroupns private', '--ulimit core=0', '--log-driver none', '--pids-limit', '--memory 8g', '--cpus 3']) {
+    for (const needle of ['--network none', '--user 10001:10001', '--cap-drop ALL', '--security-opt no-new-privileges:true', '--read-only', '--ipc private', '--cgroupns private', '--ulimit core=0', '--log-driver none', '--pids-limit', '--memory 8g', '--cpus 3']) {
       assert.ok(joined.includes(needle), needle);
     }
     assert.ok(!args.includes('-t') && !args.includes('-i'), 'no TTY, no stdin');
+    assert.ok(!args.some((a) => /^--(pid|uts|userns)(=|$)/.test(a)), 'PID/UTS/user namespaces stay Docker-private: no flag that docker/cli would reject or that could share them');
     assert.match(args.at(-1)!, /^exec <\/dev\/null >\/out\/\.build\.log 2>&1; exec node \/in\/node_modules\/tsx\/dist\/cli\.mjs \/in\/src\/server\/deploy\/build-from-inputs\.ts/);
     assert.equal(args.filter((a) => a.startsWith('type=bind') && !a.endsWith(',readonly')).length, 1, 'only /out is writable');
   });
@@ -65,6 +66,12 @@ describe('sandbox vectors', () => {
       ['env leak', [...base.slice(0, 1), '--env', 'GITHUB_TOKEN=x', ...base.slice(1)]],
       ['no caps drop', base.filter((a, i) => !(a === '--cap-drop' || base[i - 1] === '--cap-drop'))],
       ['root user', base.map((a) => (a === '10001:10001' ? '0:0' : a))],
+      ['pid host', [...base.slice(0, 1), '--pid', 'container:x', ...base.slice(1)]],
+      ['pid=host', [...base.slice(0, 1), '--pid=host', ...base.slice(1)]],
+      ['uts host', [...base.slice(0, 1), '--uts=host', ...base.slice(1)]],
+      ['userns host', [...base.slice(0, 1), '--userns', 'host', ...base.slice(1)]],
+      ['joined network', [...base.slice(0, 1), '--network=bridge', ...base.slice(1)]],
+      ['joined cap-add', [...base.slice(0, 1), '--cap-add=SYS_ADMIN', ...base.slice(1)]],
     ];
     for (const [name, args] of variants) assert.throws(() => assertSandboxInvariants(args, 'build'), Error, name);
     assert.throws(() => assertSandboxInvariants(dependencyPhaseArgs({ image: IMAGE, depsDir: '/fe/deps', name: 'd' }).filter((a) => a !== '--ignore-scripts'), 'dependency'), /lifecycle/);
