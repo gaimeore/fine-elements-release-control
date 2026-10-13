@@ -2,11 +2,11 @@
   "schema": "fe-target-fingerprints/1",
   "fingerprints": {
     "test": {
-      "backup-verify": null,
-      "backup-write": null,
-      "deploy-prepare": null,
-      "deploy": null,
-      "verify": null,
+      "backup-verify": "5bd837ee3247c05fd190fa5d148c1f47922ed88e279715c1d948a26cd07ed549",
+      "backup-write": "734ff043db639c6f4be0a5b9bdcc8e05c41026ccedfde411f584dd03df4fe0de",
+      "deploy-prepare": "bd7039083eee596455ce22db226185bbe710ec5833cc7ff4625254c4a7d7ec50",
+      "deploy": "c7409984826c18bf4d63f08cb95af416e113351a3ed20815a988a421f62f72d5",
+      "verify": "b8148678336883126d2e7912765882f339ca21115766af0efd8f8eb50e6a208d",
       "control-policy": null
     },
     "prod": {
