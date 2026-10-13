@@ -92,9 +92,9 @@ describe('TARGET_CONFIG_JSON', () => {
     assert.throws(() => parseFingerprintTable({ schema: 'fe-target-fingerprints/1', fingerprints: { test: { ...empty, deploy: hex('a') }, prod: { ...empty, deploy: hex('a') } } }), /distinct/);
   });
 
-  test('RC2 commits no real fingerprint: every committed fingerprint is a null placeholder', () => {
+  test('committed table parses; PROD carries no data-plane fingerprint until a PROD gate (only control-policy)', () => {
     const table = loadFingerprintTable();
-    for (const row of Object.values(table)) for (const value of Object.values(row)) assert.equal(value, null);
+    for (const [kind, value] of Object.entries(table.prod)) if (kind !== 'control-policy') assert.equal(value, null, `prod/${kind}`);
   });
 });
 

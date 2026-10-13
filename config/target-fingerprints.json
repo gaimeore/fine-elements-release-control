@@ -15,7 +15,7 @@
       "deploy-prepare": null,
       "deploy": null,
       "verify": null,
-      "control-policy": null
+      "control-policy": "7ba9e881e79b7d73ae724917f3cc195e2f62422b7c4158c2909e4f70c299f32a"
     }
   }
 }
