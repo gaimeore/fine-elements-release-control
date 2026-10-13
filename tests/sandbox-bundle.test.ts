@@ -12,7 +12,7 @@ import path from 'node:path';
 import { after, describe, test } from 'node:test';
 
 import { assertNodeMajor, extractSource, parseBuildInput, prepareDependencyInputs, runSandboxBuild, tsxCliEntry, type HostCommand } from '../runner/build/build-wrapper.ts';
-import { RC7_CONFIG, syntheticSource, tarOf } from '../runner/build/rc7-canary.ts';
+import { RC7_CANDIDATE_IMAGE, RC7_CONFIG, syntheticSource, tarOf } from '../runner/build/rc7-canary.ts';
 import { assertSandboxInvariants, buildPhaseArgs, dependencyPhaseArgs, loadSandboxConfig, parseSandboxConfig, requireImage } from '../runner/build/sandbox.ts';
 import { packBundle, unpackBundle, validateBundleTree } from '../runner/deploy/bundle.ts';
 import { injectRenditions, placementsFromSnapshot } from '../runner/deploy/placements.ts';
@@ -46,6 +46,7 @@ describe('sandbox vectors', () => {
     assert.ok(!args.some((a) => /^--(pid|uts|userns)(=|$)/.test(a)), 'PID/UTS/user namespaces stay Docker-private: no flag that docker/cli would reject or that could share them');
     assert.match(args.at(-1)!, /^exec <\/dev\/null >\/out\/\.build\.log 2>&1; exec node \/in\/node_modules\/tsx\/dist\/cli\.mjs \/in\/src\/server\/deploy\/build-from-inputs\.ts/);
     assert.equal(args.filter((a) => a.startsWith('type=bind') && !a.endsWith(',readonly')).length, 1, 'only /out is writable');
+    assert.ok(args.includes('/work:rw,nosuid,nodev,size=2g,mode=1777'), 'the build user can write its non-persistent /work scratch');
   });
 
   test('the dependency phase: network but no source, lifecycle scripts off, no audit/fund', () => {
@@ -97,10 +98,12 @@ describe('sandbox vectors', () => {
     assert.ok(!existsSync(root), 'the root is removed in finally');
   });
 
-  test('the committed sandbox config accepts no image yet (RC7 sets one), so the wrapper fails closed', () => {
+  test('the committed sandbox config pins exactly the RC7-accepted digest; a null image still fails closed', () => {
     const config = loadSandboxConfig();
-    assert.equal(config.nodeImage, null);
-    assert.throws(() => requireImage(config), /RC7/);
+    assert.equal(config.nodeImage, RC7_CANDIDATE_IMAGE);
+    assert.equal(config.nodeMajor, 22);
+    assert.equal(requireImage(config), RC7_CANDIDATE_IMAGE);
+    assert.throws(() => requireImage({ ...config, nodeImage: null }), /RC7/);
     assert.throws(() => parseSandboxConfig({ schema: 'fe-sandbox/1', nodeImage: 'node:22', nodeMajor: 22 }), /pinned by digest/);
   });
 });
