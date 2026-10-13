@@ -49,7 +49,10 @@ const COMMON = [
   '--cap-drop', 'ALL',
   '--security-opt', 'no-new-privileges:true',
   '--read-only',
-  '--ipc', 'private', '--pid', 'private', '--uts', 'private', '--cgroupns', 'private',
+  // PID and UTS namespaces are private by Docker default. docker/cli rejects
+  // 'private' for --pid (host|container:) and --uts (host only), so neither
+  // flag is ever passed and assertSandboxInvariants refuses any value of them.
+  '--ipc', 'private', '--cgroupns', 'private',
   '--ulimit', 'core=0',
   '--log-driver', 'none',
   '--env', 'HOME=/tmp',
@@ -109,6 +112,8 @@ export function buildPhaseArgs(input: {
 /** Exact tokens that may never appear, and fragments that may appear nowhere in any argument. */
 const FORBIDDEN_TOKENS = new Set(['-t', '--tty', '-i', '--interactive', '--init', 'host', '--network=host', '--privileged', '--cap-add', '--env-file', '--volume', '-v']);
 const FORBIDDEN_FRAGMENTS = ['docker.sock', 'containerd', 'GITHUB_', 'ACTIONS_', 'RUNNER_', '/var/run', '/proc'];
+/** Namespace-sharing flags in any form, and joined '--flag=value' forms of the pinned security flags (which would dodge the sequence checks). */
+const FORBIDDEN_FLAG = /^--(pid|uts|userns)(=|$)|^--(network|net|ipc|cgroupns|user|cap-drop|cap-add|security-opt|log-driver|mount|env|ulimit|read-only)=/;
 /** Every bind source lives under the wrapper-owned root, never a runner or home directory. */
 export const SANDBOX_ROOT = '/fe/';
 
@@ -117,7 +122,7 @@ export function assertSandboxInvariants(args: readonly string[], phase: 'depende
   const has = (...sequence: string[]): boolean => args.some((_, i) => sequence.every((s, j) => args[i + j] === s));
   for (const required of [
     ['--user', SANDBOX_UID], ['--cap-drop', 'ALL'], ['--security-opt', 'no-new-privileges:true'], ['--read-only'],
-    ['--pid', 'private'], ['--ipc', 'private'], ['--uts', 'private'], ['--cgroupns', 'private'],
+    ['--ipc', 'private'], ['--cgroupns', 'private'],
     ['--ulimit', 'core=0'], ['--log-driver', 'none'], ['--rm'],
   ]) {
     if (!has(...required)) throw new FailClosedError(`sandbox is missing ${required.join(' ')}`);
@@ -126,7 +131,7 @@ export function assertSandboxInvariants(args: readonly string[], phase: 'depende
   if (phase === 'build' && !has('--network', 'none')) throw new FailClosedError('the build sandbox must have no network');
   if (phase === 'dependency' && !args.includes('--ignore-scripts')) throw new FailClosedError('dependency install must disable lifecycle scripts');
   for (const arg of args) {
-    if (FORBIDDEN_TOKENS.has(arg) || FORBIDDEN_FRAGMENTS.some((fragment) => arg.includes(fragment))) {
+    if (FORBIDDEN_TOKENS.has(arg) || FORBIDDEN_FLAG.test(arg) || FORBIDDEN_FRAGMENTS.some((fragment) => arg.includes(fragment))) {
       throw new FailClosedError('sandbox vector contains a forbidden element');
     }
   }

@@ -1,0 +1,40 @@
+# Fine Elements — RC7 synthetic sandbox canary (S12K-BIG-RUN-5).
+#
+# Secretless and dispatch-only, from production-release only. It runs the
+# production sandbox path (runner/build/build-wrapper.ts runSandboxBuild) on
+# an invented source tree that contains NO Fine Elements code, and proves the
+# isolation properties live. No environment, no repository or environment
+# secret; github.token is mapped only into the release-tip assertion. The
+# build logs and the per-run marker never reach this job log.
+name: rc7-canary
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: fe-rc7-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Require production-release
+        run: test "$GITHUB_REF" = "refs/heads/production-release"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Require the current release tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/lib/assert-release-tip.ts
+      - name: synthetic sandbox canary (no Fine Elements source, no credential)
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/build/rc7-canary.ts
