@@ -1,0 +1,36 @@
+# Fine Elements — secretless backup scheduler (default branch only).
+#
+# No Environment, no checkout, no stored secret: the ephemeral GITHUB_TOKEN
+# with Actions write only dispatches the protected backup workflow on the
+# hard-coded production-release ref with no inputs. Each target stays inert
+# until its own repository variable is explicitly set to 'true'.
+name: scheduler
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+
+permissions: {}
+
+jobs:
+  wake-test:
+    if: vars.FE_BACKUP_SCHEDULER_TEST_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch backup-test on production-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run backup-test.yml --repo "$GITHUB_REPOSITORY" --ref production-release
+
+  wake-prod:
+    if: vars.FE_BACKUP_SCHEDULER_PROD_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch backup-prod on production-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run backup-prod.yml --repo "$GITHUB_REPOSITORY" --ref production-release

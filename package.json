@@ -1,0 +1,26 @@
+{
+  "name": "fine-elements-release-control",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Fine Elements release control plane (no application source).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"tests/*.test.ts\"",
+    "policy:self": "node --experimental-strip-types --disable-warning=ExperimentalWarning runner/policy/policy-self.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1113.0",
+    "pg": "8.23.0",
+    "wrangler": "4.124.0",
+    "yaml": "2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "@types/pg": "8.21.0",
+    "typescript": "5.9.3"
+  }
+}

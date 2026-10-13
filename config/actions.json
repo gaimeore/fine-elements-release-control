@@ -1,0 +1,9 @@
+{
+  "schema": "fe-actions/1",
+  "allowed": {
+    "actions/checkout": { "sha": "11d5960a326750d5838078e36cf38b85af677262", "version": "v4.4.0" },
+    "actions/setup-node": { "sha": "49933ea5288caeca8642d1e84afbd3f7d6820020", "version": "v4.4.0" },
+    "actions/upload-artifact": { "sha": "ea165f8d65b6e75b540449e92b4886f43607fa02", "version": "v4.6.2" },
+    "actions/download-artifact": { "sha": "d3f86a106a0bac45b974a628896c90dbdf5c8093", "version": "v4.3.0" }
+  }
+}

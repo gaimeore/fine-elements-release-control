@@ -1,0 +1,265 @@
+# Fine Elements — public deployment, TEST (R2 Model 2).
+#
+# select-claim-prepare → source-fetch → build (sandbox) → deploy → verify.
+# Intent lives in the database: this workflow is a parameterless wake-up.
+# Private source executes ONLY inside the networkless build sandbox; the
+# source-read key exists only in source-fetch; every privileged step is
+# trusted control code from production-release. Each job holds exactly one
+# credential family.
+name: deploy-test
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: fe-deploy-test
+  cancel-in-progress: false
+
+jobs:
+  select-claim-prepare:
+    runs-on: ubuntu-24.04
+    environment: test-deploy-prepare
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.select.outputs.mode }}
+      build_input_digest: ${{ steps.select.outputs.build_input_digest }}
+      deploy_input_digest: ${{ steps.select.outputs.deploy_input_digest }}
+      verify_input_digest: ${{ steps.select.outputs.verify_input_digest }}
+    steps:
+      - name: Require production-release
+        run: test "$GITHUB_REF" = "refs/heads/production-release"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Require the current release tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/lib/assert-release-tip.ts
+      - name: Install control dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare handoff directory
+        run: mkdir -m 700 -p handoff
+      - name: select / claim / prepare
+        id: select
+        env:
+          FE_TARGET: test
+          FE_HANDOFF_DIR: handoff
+          FE_DEPLOY_PAUSED: ${{ vars.FE_DEPLOY_PAUSED_TEST }}
+          TARGET_CONFIG_JSON: ${{ secrets.TARGET_CONFIG_JSON }}
+          DEPLOY_RUNNER_DATABASE_URL: ${{ secrets.TEST_DEPLOY_RUNNER_DATABASE_URL }}
+          R2_DEPLOY_READER_ACCESS_KEY_ID: ${{ secrets.R2_TEST_DEPLOY_READER_ACCESS_KEY_ID }}
+          R2_DEPLOY_READER_SECRET_ACCESS_KEY: ${{ secrets.R2_TEST_DEPLOY_READER_SECRET_ACCESS_KEY }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/deploy/deploy-cli.ts select
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: build-input
+          path: handoff/build-input.fehandoff
+          retention-days: 1
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: deploy-input
+          path: handoff/deploy-input.fehandoff
+          retention-days: 1
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: verify-input
+          path: handoff/verify-input.fehandoff
+          retention-days: 1
+          if-no-files-found: ignore
+
+  source-fetch:
+    needs: select-claim-prepare
+    if: needs.select-claim-prepare.outputs.mode == 'fresh' || needs.select-claim-prepare.outputs.mode == 'resolve'
+    runs-on: ubuntu-24.04
+    environment: test-source-fetch
+    permissions:
+      contents: read
+    outputs:
+      source_digest: ${{ steps.fetch.outputs.source_digest }}
+    steps:
+      - name: Require production-release
+        run: test "$GITHUB_REF" = "refs/heads/production-release"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Require the current release tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/lib/assert-release-tip.ts
+      - name: Prepare handoff directory
+        run: mkdir -m 700 -p handoff
+      - name: fetch and attest the exact private commit
+        id: fetch
+        env:
+          FE_TARGET: test
+          FE_HANDOFF_OUT: handoff/source.fehandoff
+          SOURCE_DEPLOY_KEY: ${{ secrets.TEST_SOURCE_DEPLOY_KEY }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/source/source-fetch.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source
+          path: handoff/source.fehandoff
+          retention-days: 1
+          if-no-files-found: error
+
+  build:
+    needs: [select-claim-prepare, source-fetch]
+    runs-on: ubuntu-24.04
+    environment: test-build
+    permissions:
+      contents: read
+    outputs:
+      bundle_digest: ${{ steps.build.outputs.bundle_digest }}
+      bundle_files_digest: ${{ steps.build.outputs.bundle_files_digest }}
+    steps:
+      - name: Require production-release
+        run: test "$GITHUB_REF" = "refs/heads/production-release"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Require the current release tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/lib/assert-release-tip.ts
+      - name: Prepare handoff directory
+        run: mkdir -m 700 -p handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: source
+          path: handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: build-input
+          path: handoff
+      - name: sandbox build (private code only inside the networkless sandbox)
+        id: build
+        env:
+          FE_TARGET: test
+          SOURCE_DIGEST: ${{ needs.source-fetch.outputs.source_digest }}
+          BUILD_INPUT_DIGEST: ${{ needs.select-claim-prepare.outputs.build_input_digest }}
+          FE_HANDOFF_PRIVATE_KEY: ${{ secrets.TEST_BUILD_HANDOFF_KEY }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/build/build-wrapper.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bundle
+          path: handoff/bundle.fehandoff
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bundle-files
+          path: handoff/bundle-files.fehandoff
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: build-log
+          path: handoff/build-log.fehandoff
+          retention-days: 1
+          if-no-files-found: ignore
+
+  deploy:
+    needs: [select-claim-prepare, build]
+    runs-on: ubuntu-24.04
+    environment: test-deploy
+    permissions:
+      contents: read
+    steps:
+      - name: Require production-release
+        run: test "$GITHUB_REF" = "refs/heads/production-release"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Require the current release tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/lib/assert-release-tip.ts
+      - name: Install control dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare handoff directory
+        run: mkdir -m 700 -p handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: deploy-input
+          path: handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bundle
+          path: handoff
+      - name: deploy the validated bundle
+        env:
+          FE_TARGET: test
+          FE_HANDOFF_DIR: handoff
+          WRANGLER_SEND_METRICS: 'false'
+          DEPLOY_INPUT_DIGEST: ${{ needs.select-claim-prepare.outputs.deploy_input_digest }}
+          BUNDLE_DIGEST: ${{ needs.build.outputs.bundle_digest }}
+          TARGET_CONFIG_JSON: ${{ secrets.TARGET_CONFIG_JSON }}
+          DEPLOY_RUNNER_DATABASE_URL: ${{ secrets.TEST_DEPLOY_RUNNER_DATABASE_URL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_TEST_PUBLIC_DEPLOY_TOKEN }}
+          FE_HANDOFF_PRIVATE_KEY: ${{ secrets.TEST_DEPLOY_HANDOFF_KEY }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/deploy/deploy-cli.ts deploy
+
+  verify:
+    needs: [select-claim-prepare, build, deploy]
+    runs-on: ubuntu-24.04
+    environment: test-verify
+    permissions:
+      contents: read
+    steps:
+      - name: Require production-release
+        run: test "$GITHUB_REF" = "refs/heads/production-release"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Require the current release tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/lib/assert-release-tip.ts
+      - name: Install control dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare handoff directory
+        run: mkdir -m 700 -p handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: verify-input
+          path: handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bundle-files
+          path: handoff
+      - name: verify the live result (read-only; never redeploys)
+        env:
+          FE_TARGET: test
+          FE_HANDOFF_DIR: handoff
+          WRANGLER_SEND_METRICS: 'false'
+          VERIFY_INPUT_DIGEST: ${{ needs.select-claim-prepare.outputs.verify_input_digest }}
+          BUNDLE_FILES_DIGEST: ${{ needs.build.outputs.bundle_files_digest }}
+          TARGET_CONFIG_JSON: ${{ secrets.TARGET_CONFIG_JSON }}
+          DEPLOY_RUNNER_DATABASE_URL: ${{ secrets.TEST_DEPLOY_RUNNER_DATABASE_URL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_TEST_PUBLIC_READ_TOKEN }}
+          FE_HANDOFF_PRIVATE_KEY: ${{ secrets.TEST_VERIFY_HANDOFF_KEY }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/deploy/deploy-cli.ts verify

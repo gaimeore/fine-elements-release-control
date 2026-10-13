@@ -1,0 +1,21 @@
+{
+  "schema": "fe-recipients/1",
+  "recipients": {
+    "test": {
+      "backup-verify": null,
+      "backup-write": null,
+      "build": null,
+      "deploy": null,
+      "verify": null,
+      "audit": null
+    },
+    "prod": {
+      "backup-verify": null,
+      "backup-write": null,
+      "build": null,
+      "deploy": null,
+      "verify": null,
+      "audit": null
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "schema": "fe-target-fingerprints/1",
+  "fingerprints": {
+    "test": {
+      "backup-verify": null,
+      "backup-write": null,
+      "deploy-prepare": null,
+      "deploy": null,
+      "verify": null,
+      "control-policy": null
+    },
+    "prod": {
+      "backup-verify": null,
+      "backup-write": null,
+      "deploy-prepare": null,
+      "deploy": null,
+      "verify": null,
+      "control-policy": null
+    }
+  }
+}

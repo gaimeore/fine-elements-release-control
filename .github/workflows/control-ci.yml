@@ -1,0 +1,29 @@
+# Fine Elements — control-plane CI: secretless quality checks of the PR's
+# own code (typecheck, tests, static self-policy). Not a security boundary:
+# the security check is the App-pinned fe-policy check (policy.yml).
+name: control-ci
+
+on:
+  pull_request:
+    branches: [main, production-release]
+  push:
+    branches: [main, production-release]
+
+permissions: {}
+
+jobs:
+  control-ci:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run policy:self

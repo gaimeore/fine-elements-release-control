@@ -1,0 +1,43 @@
+# Fine Elements — trusted policy check (fe-policy).
+#
+# pull_request_target runs THIS default-branch definition, never the PR's.
+# It NEVER checks out or executes PR code: changed files are read through the
+# GitHub API as data only. The verdict is published as the `fe-policy` check
+# run by the dedicated fe-control-policy GitHub App, and branch protection
+# pins that required check to the App's ID, so a PR-defined job with the
+# same name cannot satisfy it. No other workflow may reference the
+# control-policy environment.
+name: policy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+    branches: [main, production-release]
+
+permissions: {}
+
+concurrency:
+  group: fe-policy-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  fe-policy:
+    runs-on: ubuntu-24.04
+    environment: control-policy
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: evaluate the PR as data and publish fe-policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_CONFIG_JSON: ${{ secrets.TARGET_CONFIG_JSON }}
+          CONTROL_POLICY_APP_PRIVATE_KEY: ${{ secrets.CONTROL_POLICY_APP_PRIVATE_KEY }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/policy/policy-cli.ts

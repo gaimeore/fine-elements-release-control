@@ -1,0 +1,149 @@
+# Fine Elements — master backup lane, PROD (backup Model C).
+#
+# verify-scan → write-missing → verify-again → final current-state coverage.
+# Each job runs in its own Environment and holds exactly one credential
+# family; reports cross jobs only as encrypted handoffs whose digests travel
+# as job outputs. Dispatched without inputs and refused on any ref other than
+# production-release.
+name: backup-prod
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: fe-backup-prod
+  cancel-in-progress: false
+
+jobs:
+  verify-scan:
+    runs-on: ubuntu-24.04
+    environment: prod-backup-verify
+    permissions:
+      contents: read
+    outputs:
+      scan_digest: ${{ steps.scan.outputs.scan_digest }}
+    steps:
+      - name: Require production-release
+        run: test "$GITHUB_REF" = "refs/heads/production-release"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Require the current release tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/lib/assert-release-tip.ts
+      - name: Install control dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare handoff directory
+        run: mkdir -m 700 -p handoff
+      - name: verify-scan
+        id: scan
+        env:
+          FE_TARGET: prod
+          TARGET_CONFIG_JSON: ${{ secrets.TARGET_CONFIG_JSON }}
+          BACKUP_VERIFIER_DATABASE_URL: ${{ secrets.PROD_BACKUP_VERIFIER_DATABASE_URL }}
+          B2_RESTORE_KEY_ID: ${{ secrets.B2_PROD_RESTORE_KEY_ID }}
+          B2_RESTORE_APPLICATION_KEY: ${{ secrets.B2_PROD_RESTORE_APPLICATION_KEY }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/backup/backup-cli.ts scan --target prod --out handoff/backup-scan.fehandoff
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: backup-scan
+          path: handoff/backup-scan.fehandoff
+          retention-days: 1
+          if-no-files-found: error
+
+  write-missing:
+    needs: verify-scan
+    runs-on: ubuntu-24.04
+    environment: prod-backup-write
+    permissions:
+      contents: read
+    outputs:
+      write_digest: ${{ steps.write.outputs.write_digest }}
+    steps:
+      - name: Require production-release
+        run: test "$GITHUB_REF" = "refs/heads/production-release"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Require the current release tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/lib/assert-release-tip.ts
+      - name: Install control dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare handoff directory
+        run: mkdir -m 700 -p handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: backup-scan
+          path: handoff
+      - name: write-missing
+        id: write
+        env:
+          FE_TARGET: prod
+          SCAN_DIGEST: ${{ needs.verify-scan.outputs.scan_digest }}
+          TARGET_CONFIG_JSON: ${{ secrets.TARGET_CONFIG_JSON }}
+          R2_SOURCE_ACCESS_KEY_ID: ${{ secrets.R2_PROD_SOURCE_ACCESS_KEY_ID }}
+          R2_SOURCE_SECRET_ACCESS_KEY: ${{ secrets.R2_PROD_SOURCE_SECRET_ACCESS_KEY }}
+          B2_WRITER_KEY_ID: ${{ secrets.B2_PROD_WRITER_KEY_ID }}
+          B2_WRITER_APPLICATION_KEY: ${{ secrets.B2_PROD_WRITER_APPLICATION_KEY }}
+          FE_HANDOFF_PRIVATE_KEY: ${{ secrets.PROD_BACKUP_WRITE_HANDOFF_KEY }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/backup/backup-cli.ts write --target prod --plan handoff/backup-scan.fehandoff --out handoff/backup-write.fehandoff
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: backup-write
+          path: handoff/backup-write.fehandoff
+          retention-days: 1
+          if-no-files-found: error
+
+  verify-again:
+    needs: [verify-scan, write-missing]
+    runs-on: ubuntu-24.04
+    environment: prod-backup-verify
+    permissions:
+      contents: read
+    steps:
+      - name: Require production-release
+        run: test "$GITHUB_REF" = "refs/heads/production-release"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Require the current release tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/lib/assert-release-tip.ts
+      - name: Install control dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare handoff directory
+        run: mkdir -m 700 -p handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: backup-scan
+          path: handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: backup-write
+          path: handoff
+      - name: verify-again
+        env:
+          FE_TARGET: prod
+          SCAN_DIGEST: ${{ needs.verify-scan.outputs.scan_digest }}
+          WRITE_DIGEST: ${{ needs.write-missing.outputs.write_digest }}
+          TARGET_CONFIG_JSON: ${{ secrets.TARGET_CONFIG_JSON }}
+          BACKUP_VERIFIER_DATABASE_URL: ${{ secrets.PROD_BACKUP_VERIFIER_DATABASE_URL }}
+          B2_RESTORE_KEY_ID: ${{ secrets.B2_PROD_RESTORE_KEY_ID }}
+          B2_RESTORE_APPLICATION_KEY: ${{ secrets.B2_PROD_RESTORE_APPLICATION_KEY }}
+          FE_HANDOFF_PRIVATE_KEY: ${{ secrets.PROD_BACKUP_VERIFY_HANDOFF_KEY }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning runner/backup/backup-cli.ts verify --target prod --scan-report handoff/backup-scan.fehandoff --write-report handoff/backup-write.fehandoff --out handoff/none
