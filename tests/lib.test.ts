@@ -92,9 +92,12 @@ describe('TARGET_CONFIG_JSON', () => {
     assert.throws(() => parseFingerprintTable({ schema: 'fe-target-fingerprints/1', fingerprints: { test: { ...empty, deploy: hex('a') }, prod: { ...empty, deploy: hex('a') } } }), /distinct/);
   });
 
-  test('committed table parses; PROD carries no data-plane fingerprint until a PROD gate (only control-policy)', () => {
+  test('committed table: TEST data-plane kinds provisioned, test/control-policy null; PROD only the accepted control-policy fingerprint', () => {
     const table = loadFingerprintTable();
     for (const [kind, value] of Object.entries(table.prod)) if (kind !== 'control-policy') assert.equal(value, null, `prod/${kind}`);
+    assert.equal(table.prod['control-policy'], '7ba9e881e79b7d73ae724917f3cc195e2f62422b7c4158c2909e4f70c299f32a');
+    assert.equal(table.test['control-policy'], null);
+    for (const kind of ['backup-verify', 'backup-write', 'deploy-prepare', 'deploy', 'verify'] as const) assert.match(table.test[kind] ?? '', /^[0-9a-f]{64}$/, `test/${kind}`);
   });
 });
 
@@ -147,10 +150,12 @@ describe('encrypted handoffs (X25519 → HKDF-SHA256 → AES-256-GCM)', () => {
     assert.throws(() => sealHandoff(plaintext, [], ctx()), /at least one recipient/);
   });
 
-  test('RC2 commits no recipient key: every committed recipient is a null placeholder and fails closed', () => {
+  test('committed recipients: TEST has exactly the six distinct public keys; every PROD recipient is null and fails closed', () => {
     const table = loadRecipientTable();
-    assert.throws(() => recipientsFor(table, 'test', ['deploy']), /not provisioned/);
-    for (const row of Object.values(table)) for (const value of Object.values(row)) assert.equal(value, null);
+    assert.throws(() => recipientsFor(table, 'prod', ['deploy']), /not provisioned/);
+    for (const value of Object.values(table.prod)) assert.equal(value, null);
+    const testKeys = recipientsFor(table, 'test', ['backup-verify', 'backup-write', 'build', 'deploy', 'verify', 'audit']).map((r) => r.x);
+    assert.equal(new Set(testKeys).size, 6);
     assert.throws(() => parseRecipientTable({ schema: 'fe-recipients/1', recipients: { test: {} } }), /exactly test and prod/);
   });
 });
