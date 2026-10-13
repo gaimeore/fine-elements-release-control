@@ -2,12 +2,12 @@
   "schema": "fe-recipients/1",
   "recipients": {
     "test": {
-      "backup-verify": null,
-      "backup-write": null,
-      "build": null,
-      "deploy": null,
-      "verify": null,
-      "audit": null
+      "backup-verify": "HDHBGSYtTfJHQkh-OS00tcNig8dQzBpjdHkAYJSQPwM",
+      "backup-write": "4bz9X1LN9eTQGXVodVTrUIV1mIRJYSEdEKNpsEzjW3Y",
+      "build": "vofKNw7Jhar6AW4OXeSikOwrCjjttvkBNRYSuJMZT3A",
+      "deploy": "yqfveZCabqxfrA5O9Ox8iutevrQoRCQ3Eskk04T0hyY",
+      "verify": "mVP1absoXtj8MlG7UZqLUrmpdcs_zifTRrySdkJqP3E",
+      "audit": "BcU_qjr_kMJraDLFS5CKpggEhRp-UWi6AZicW_XQCwk"
     },
     "prod": {
       "backup-verify": null,
