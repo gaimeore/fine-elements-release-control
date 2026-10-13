@@ -200,7 +200,9 @@ const SANDBOX_REQUIRED = [
   "'--read-only',",
   "'--log-driver', 'none',",
   "'--ulimit', 'core=0',",
-  "'--ipc', 'private', '--pid', 'private', '--uts', 'private', '--cgroupns', 'private',",
+  // PID/UTS namespaces are Docker-private by default; docker/cli rejects 'private' for --pid/--uts.
+  "'--ipc', 'private',",
+  "'--cgroupns', 'private',",
   "'npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund',",
   "SANDBOX_UID = '10001:10001'",
   "'exec </dev/null >/out/.build.log 2>&1;',",
@@ -212,7 +214,11 @@ export function lintSandboxSource(file: string, text: string): Finding[] {
 
 export function lintBuildWrapper(file: string, text: string): Finding[] {
   const findings: Finding[] = [];
-  for (const needle of ["assertSandboxInvariants(depsArgs, 'dependency')", "assertSandboxInvariants(buildArgs, 'build')", "stdio: ['ignore', fd, fd]"]) {
+  for (const needle of [
+    "assertSandboxInvariants(depsArgs, 'dependency')", "assertSandboxInvariants(buildArgs, 'build')", "stdio: ['ignore', fd, fd]",
+    // the build is time-bounded, and the container is force-removed right after the bound
+    "host.run('timeout', ['--kill-after=15s', '1200', 'docker', ...buildArgs]", "host.run('docker', ['rm', '-f', 'fe-build']",
+  ]) {
     if (!text.includes(needle)) findings.push({ rule: 'sandbox-template', path: file, detail: `missing ${needle}` });
   }
   if (/stdio:\s*'inherit'/.test(text)) findings.push({ rule: 'sandbox-template', path: file, detail: 'sandbox output may never inherit the job log' });
