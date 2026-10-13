@@ -59,3 +59,5 @@ fingerprint and recipient is `null`, and no sandbox image is accepted.
 ## Bootstrap record
 
 - RC3: the first App-origin `fe-policy` check was observed on a docs-only bootstrap PR before branch protection began requiring it.
+
+- RC7: throwaway pull_request_target proof PR (closed unmerged).
