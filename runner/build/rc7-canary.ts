@@ -18,7 +18,7 @@ import { FailClosedError } from '../lib/errors.ts';
 import { assertReleaseRun, runContextFrom } from '../lib/github.ts';
 import { isCredentialName } from '../lib/job-env.ts';
 import { extractSource, prepareDependencyInputs, runSandboxBuild, tsxCliEntry } from './build-wrapper.ts';
-import { assertSandboxInvariants, buildPhaseArgs, dependencyPhaseArgs, parseSandboxConfig, type SandboxConfig } from './sandbox.ts';
+import { assertSandboxInvariants, buildPhaseArgs, dependencyPhaseArgs, loadSandboxConfig, parseSandboxConfig, type SandboxConfig } from './sandbox.ts';
 
 /** The RC7 candidate (docker.io/library/node:22-bookworm-slim resolved to its OCI index digest). */
 export const RC7_CANDIDATE_IMAGE = 'docker.io/library/node@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392';
@@ -836,6 +836,8 @@ export async function main(env: NodeJS.ProcessEnv): Promise<void> {
       && i.logDriver === 'none' && i.autoRemove === true && (i.binds === null || i.binds.length === 0) && (i.devices === null || i.devices.length === 0)
       && facts.uid === 10001 && facts.gid === 10001 && /^0+$/.test(facts.CapEff) && facts.NoNewPrivs === '1',
     CLEANUP: isClean(afterBuild) && isClean(final) && JSON.stringify(files) === '["_headers","index.html"]',
+    WORK_SCRATCH_WRITABLE: facts.writes['/work'] === 'WRITABLE' && facts.writes['/tmp'] === 'WRITABLE',
+    CONFIG_PINNED: loadSandboxConfig().nodeImage === image && loadSandboxConfig().nodeMajor === 22,
   };
   console.log(`RC7_FACTS ${JSON.stringify({ image: { reference: image, repoDigests, architecture: imageFacts[1], os: imageFacts[2] }, inContainer: facts, loop, cleanup: { afterBuild, final }, bundleFiles: files, wrapperBound })}`);
   for (const [name, ok] of Object.entries(proofs)) console.log(`FE_RC7_${name}=${ok ? 'PASS' : 'FAIL'}`);
