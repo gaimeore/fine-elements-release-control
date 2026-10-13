@@ -114,7 +114,10 @@ export async function runSandboxBuild(input: {
     if (await host.run(command, args, `${dirs.log}/host.log`) !== 0) throw new FailClosedError(failure);
   };
   try {
-    await must('sudo', ['install', '-d', '-m', '0755', '-o', String(process.getuid?.() ?? 0), root], 'sandbox root could not be created');
+    // The log directory lives under the root, so creating the root cannot log into it.
+    if (await host.run('sudo', ['install', '-d', '-m', '0755', '-o', String(process.getuid?.() ?? 0), root], '/dev/null') !== 0) {
+      throw new FailClosedError('sandbox root could not be created');
+    }
     mkdirSync(dirs.log, { recursive: true, mode: 0o700 });
     extractSource(input.archive, dirs.src);
     assertNodeMajor(dirs.src, input.config);

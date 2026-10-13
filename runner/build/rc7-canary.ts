@@ -845,7 +845,7 @@ export async function main(env: NodeJS.ProcessEnv): Promise<void> {
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.env).catch((error: unknown) => {
-    console.error(`FE_RC7_CANARY=FAIL ${error instanceof FailClosedError ? error.message : (error as Error)?.name ?? 'failed'}`);
+    console.error(`FE_RC7_CANARY=FAIL ${error instanceof FailClosedError ? error.message : `${(error as Error)?.name ?? 'failed'} ${(error as NodeJS.ErrnoException)?.code ?? ''}`}`);
     process.exit(1);
   });
 }
