@@ -17,7 +17,7 @@ export const SANDBOX_UID = '10001:10001';
 
 export interface SandboxConfig {
   readonly schema: 'fe-sandbox/1';
-  /** node image pinned by digest; null until the RC7 canary accepts one. */
+  /** node image pinned by digest (accepted by the RC7 canary). */
   readonly nodeImage: string | null;
   readonly nodeMajor: number;
 }
@@ -98,7 +98,8 @@ export function buildPhaseArgs(input: {
     '--ulimit', 'nofile=8192',
     '--env', 'NODE_ENV=production', '--env', 'CI=1',
     '--tmpfs', '/tmp:rw,nosuid,nodev,size=1g',
-    '--tmpfs', '/work:rw,nosuid,nodev,size=2g',
+    // A tmpfs on a path absent from the image is created root-owned 0755; the build user needs to write /work.
+    '--tmpfs', '/work:rw,nosuid,nodev,size=2g,mode=1777',
     '--mount', `type=bind,src=${input.srcDir},dst=/in/src,readonly`,
     '--mount', `type=bind,src=${input.modulesDir},dst=/in/node_modules,readonly`,
     '--mount', `type=bind,src=${input.snapshotDir},dst=/in/snapshot,readonly`,
