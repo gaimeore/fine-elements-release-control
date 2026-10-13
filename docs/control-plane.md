@@ -55,3 +55,7 @@ output.
 Workflows exist but nothing privileged can run: there is no environment,
 secret, deploy key, GitHub App or `production-release` yet, every
 fingerprint and recipient is `null`, and no sandbox image is accepted.
+
+## Bootstrap record
+
+- RC3: the first App-origin `fe-policy` check was observed on a docs-only bootstrap PR before branch protection began requiring it.
