@@ -6,12 +6,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
 
-import { assertNodeMajor, extractSource, parseBuildInput, prepareDependencyInputs, tsxCliEntry } from '../runner/build/build-wrapper.ts';
+import { assertNodeMajor, extractSource, parseBuildInput, prepareDependencyInputs, runSandboxBuild, tsxCliEntry, type HostCommand } from '../runner/build/build-wrapper.ts';
+import { RC7_CONFIG, syntheticSource, tarOf } from '../runner/build/rc7-canary.ts';
 import { assertSandboxInvariants, buildPhaseArgs, dependencyPhaseArgs, loadSandboxConfig, parseSandboxConfig, requireImage } from '../runner/build/sandbox.ts';
 import { packBundle, unpackBundle, validateBundleTree } from '../runner/deploy/bundle.ts';
 import { injectRenditions, placementsFromSnapshot } from '../runner/deploy/placements.ts';
@@ -75,6 +76,25 @@ describe('sandbox vectors', () => {
     ];
     for (const [name, args] of variants) assert.throws(() => assertSandboxInvariants(args, 'build'), Error, name);
     assert.throws(() => assertSandboxInvariants(dependencyPhaseArgs({ image: IMAGE, depsDir: '/fe/deps', name: 'd' }).filter((a) => a !== '--ignore-scripts'), 'dependency'), /lifecycle/);
+  });
+
+  test('runSandboxBuild never logs into a directory that does not exist yet (RC7 canary regression)', async () => {
+    const root = path.join(scratch, 'wrapper-root');
+    const calls: { command: string; first: string; logDirExisted: boolean }[] = [];
+    const host: HostCommand = {
+      run: async (command, args, logFile) => {
+        calls.push({ command, first: args[0] ?? '', logDirExisted: logFile === '/dev/null' || existsSync(path.dirname(logFile)) });
+        if (command === 'sudo' && args[0] === 'install') mkdirSync(root, { recursive: true });
+        if (command === 'sudo' && args[0] === 'rm') rmSync(root, { recursive: true, force: true });
+        return 0;
+      },
+    };
+    const snapshot = Buffer.from('{}');
+    // Off /fe the bind-source invariant stops the run at the dependency vector, after the root and log setup.
+    await assert.rejects(runSandboxBuild({ archive: tarOf(syntheticSource()), build: { snapshot, snapshotSha256: sha(snapshot), sourceCommit: '0'.repeat(40), manifestSequence: 0 }, config: RC7_CONFIG, host, root }), /under \/fe\//);
+    assert.deepEqual(calls[0], { command: 'sudo', first: 'install', logDirExisted: true });
+    assert.ok(calls.every((c) => c.logDirExisted), JSON.stringify(calls));
+    assert.ok(!existsSync(root), 'the root is removed in finally');
   });
 
   test('the committed sandbox config accepts no image yet (RC7 sets one), so the wrapper fails closed', () => {
