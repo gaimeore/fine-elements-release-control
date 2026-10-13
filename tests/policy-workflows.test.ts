@@ -205,6 +205,17 @@ describe('policy engine — PR classes', () => {
     assert.equal(pr({ '.github/workflows/backup-test.yml': mutate('backup-test.yml', 'workflow_dispatch:', 'workflow_run:') }).pass, false);
     assert.equal(pr({ 'runner/build/sandbox.ts': readFileSync('runner/build/sandbox.ts', 'utf8').replace("'--network', 'none'", "'--network', 'bridge'") }).pass, false);
   });
+
+  test('the build wrapper keeps its time bound and the forced container removal right after it', () => {
+    const wrapper = readFileSync('runner/build/build-wrapper.ts', 'utf8');
+    assert.equal(pr({ 'runner/build/build-wrapper.ts': wrapper }).pass, true);
+    const cases: [string, string][] = [["'--kill-after=15s', '1200'", "'--kill-after=15s', '86400'"], ["host.run('timeout', [", "host.run('nice', ["], ["['rm', '-f', 'fe-build']", "['ps']"]];
+    for (const [from, to] of cases) {
+      assert.notEqual(wrapper.replace(from, to), wrapper, from);
+      assert.equal(pr({ 'runner/build/build-wrapper.ts': wrapper.replace(from, to) }).pass, false, from);
+    }
+    assert.equal(pr({ 'runner/build/sandbox.ts': readFileSync('runner/build/sandbox.ts', 'utf8').replace("'--ipc', 'private', '--cgroupns', 'private',", "'--ipc', 'host', '--cgroupns', 'host',") }).pass, false);
+  });
 });
 
 describe('content scanner', () => {
