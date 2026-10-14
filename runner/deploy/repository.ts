@@ -187,6 +187,19 @@ export async function findLatestSucceeded(db: SqlExecutor): Promise<DeploymentEv
   return row === undefined ? null : mapEvent(row);
 }
 
+/** The succeeded event immediately before the given event, in findLatestSucceeded's sequence. */
+export async function findSucceededBefore(db: SqlExecutor, eventId: string): Promise<DeploymentEvent | null> {
+  const result = await db.query(
+    `SELECT e.id, e.attempt_id, e.publication_id, e.event, e.provider_version_id, e.detail, e.created_at
+     FROM deployment_event e JOIN deployment_event cur ON cur.id = $1
+     WHERE e.event = 'succeeded' AND (e.created_at, e.id) < (cur.created_at, cur.id)
+     ORDER BY e.created_at DESC, e.id DESC LIMIT 1`,
+    [eventId],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : mapEvent(row);
+}
+
 export async function hasProviderVersionHistory(db: SqlExecutor, providerVersionId: string): Promise<boolean> {
   const result = await db.query('SELECT id FROM deployment_event WHERE provider_version_id = $1 LIMIT 1', [providerVersionId]);
   return result.rows.length > 0;
