@@ -31,9 +31,9 @@ import { loadFingerprintTable, parseTarget, verifiedTargetConfig, type Target } 
 import { createR2SourceClient } from '../backup/s3-backup-adapters.ts';
 import { injectRenditions, placementsFromSnapshot, sha256Hex, type RenditionPlacement } from './placements.ts';
 import { unpackBundle, validateBundleTree } from './bundle.ts';
-import { runDeploy, runVerify, selectWork, type ClaimRecord } from './orchestrator.ts';
+import { runDeploy, runVerify, selectWork, type ClaimRecord, type PreviousLiveEvidence } from './orchestrator.ts';
 import { CloudflareWorkersDeploymentProvider } from './provider.ts';
-import { findPublication } from './repository.ts';
+import { findLatestSucceeded, findPublication } from './repository.ts';
 
 export type DeployMode = 'select' | 'deploy' | 'verify';
 
@@ -58,6 +58,23 @@ export function parseClaim(value: unknown): ClaimRecord {
     if (typeof raw[key] !== 'string' || raw[key] === '') throw new FailClosedError('claim record is malformed');
   }
   return raw as unknown as ClaimRecord;
+}
+
+/** null only when select found no earlier succeeded attempt (verify then fails closed). */
+export function parsePreviousLive(value: unknown): PreviousLiveEvidence | null {
+  if (value === null) return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new FailClosedError('previous live evidence is malformed');
+  for (const key of ['attempt_id', 'publication_id', 'provider_version_id', 'snapshot_sha256', 'snapshot_b64']) {
+    if (typeof raw[key] !== 'string' || raw[key] === '') throw new FailClosedError('previous live evidence is malformed');
+  }
+  return {
+    attemptId: raw.attempt_id as string,
+    publicationId: raw.publication_id as string,
+    providerVersionId: raw.provider_version_id as string,
+    snapshotSha256: raw.snapshot_sha256 as string,
+    snapshot: new Uint8Array(Buffer.from(raw.snapshot_b64 as string, 'base64')),
+  };
 }
 
 async function select(env: NodeJS.ProcessEnv, run: RunContext, target: Target, manifest: ReleaseManifest): Promise<number> {
@@ -92,6 +109,21 @@ async function select(env: NodeJS.ProcessEnv, run: RunContext, target: Target, m
       if (sha256Hex(bytes) !== placement.sha256) throw new FailClosedError('a rendition does not match its snapshot hash');
       renditions[placement.renditionKey] = Buffer.from(bytes).toString('base64');
     }
+    // The publication live before this attempt; verify re-binds it to the ledger and proves its retired renditions absent.
+    const previous = await findLatestSucceeded(db);
+    let previousLive: Record<string, string> | null = null;
+    if (previous !== null) {
+      const prior = await findPublication(db, previous.publicationId);
+      if (prior === null) throw new FailClosedError('the previous live publication is missing');
+      const priorSnapshot = await getObject(r2, bucket, prior.snapshotKey);
+      if (sha256Hex(priorSnapshot) !== prior.contentHash || prior.snapshotKey !== `snapshots/${prior.contentHash}.json`) {
+        throw new FailClosedError('previous live publication snapshot does not match its content hash');
+      }
+      previousLive = {
+        attempt_id: previous.attemptId, publication_id: previous.publicationId, provider_version_id: previous.providerVersionId,
+        snapshot_sha256: prior.contentHash, snapshot_b64: Buffer.from(priorSnapshot).toString('base64'),
+      };
+    }
     const claim: ClaimRecord = { attemptId: job.attemptId, publicationId: job.publicationId, claimedAt: job.claimedAt!, sourceCommit: job.sourceCommit!, mode: selection.mode };
     const json = (value: unknown): Buffer => Buffer.from(JSON.stringify(value), 'utf8');
     const out = (name: string): string => path.join(requireEnv(env, 'FE_HANDOFF_DIR'), `${name}.fehandoff`);
@@ -103,7 +135,7 @@ async function select(env: NodeJS.ProcessEnv, run: RunContext, target: Target, m
       schema: 'fe-deploy-input/1', claim, snapshot_sha256: publication.contentHash, placements, renditions,
     }), recipientsFor(recipients, target, ['deploy']), context(run, target, manifest, 'select-claim-prepare', 'deploy-input')));
     setStepOutput(env, 'verify_input_digest', writeHandoff(out('verify-input'), json({
-      schema: 'fe-verify-input/1', claim, placements,
+      schema: 'fe-verify-input/2', claim, placements, previous_live: previousLive,
     }), recipientsFor(recipients, target, ['verify']), context(run, target, manifest, 'select-claim-prepare', 'verify-input')));
     setStepOutput(env, 'mode', selection.mode);
     status(selection.mode === 'fresh' ? 'FE_DEPLOY_SELECT=FRESH' : 'FE_DEPLOY_SELECT=RESOLVE', { renditions: placements.length });
@@ -166,7 +198,9 @@ async function verify(env: NodeJS.ProcessEnv, run: RunContext, target: Target, m
   const dir = requireEnv(env, 'FE_HANDOFF_DIR');
   const input = JSON.parse(readHandoff(path.join(dir, 'verify-input.fehandoff'), env.VERIFY_INPUT_DIGEST, key, context(run, target, manifest, 'select-claim-prepare', 'verify-input')).toString('utf8')) as Record<string, unknown>;
   const files = JSON.parse(readHandoff(path.join(dir, 'bundle-files.fehandoff'), env.BUNDLE_FILES_DIGEST, key, context(run, target, manifest, 'build', 'bundle-files')).toString('utf8')) as { files: { path: string; sha256: string }[] };
+  if (input.schema !== 'fe-verify-input/2' || !('previous_live' in input)) throw new FailClosedError('verify input is malformed');
   const claim = parseClaim(input.claim);
+  const previousLive = parsePreviousLive(input.previous_live);
   const db = createPgDatabase(requireEnv(env, 'DEPLOY_RUNNER_DATABASE_URL'));
   try {
     await assertDatabaseIdentity(db, config);
@@ -190,6 +224,7 @@ async function verify(env: NodeJS.ProcessEnv, run: RunContext, target: Target, m
       publicationId: claim.publicationId,
       placements: input.placements as RenditionPlacement[],
       files: files.files.filter((file) => ['index.html', 'robots.txt', 'sitemap.xml'].includes(file.path)),
+      previousLive,
     });
     status(`FE_VERIFY=${outcome.toUpperCase()}`);
     return outcome === 'verified' || outcome === 'already_verified' ? 0 : 1;
