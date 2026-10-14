@@ -72,6 +72,17 @@ export function placementsFromSnapshot(bytes: Uint8Array): RenditionPlacement[] 
   return placements;
 }
 
+/**
+ * Placements public before and absent now, compared by exact public path.
+ * The filename carries the photograph/site-image id AND the content hash, so
+ * an unchanged, reordered or metadata-only entry keeps its path, while a
+ * replacement, move, archive or portrait change retires the old path.
+ */
+export function removedPlacements(before: readonly RenditionPlacement[], after: readonly RenditionPlacement[]): RenditionPlacement[] {
+  const kept = new Set(after.map((placement) => placement.publicPath));
+  return before.filter((placement) => !kept.has(placement.publicPath));
+}
+
 export function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
