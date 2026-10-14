@@ -14,12 +14,14 @@
  *   separated checks → at most ONE same-attempt upload under the one-shot
  *   resume_authorized_at, and only if source_commit still equals the manifest;
  * - verification is read-only toward the provider, never redeploys, and is
- *   monotonic (once verified, Live ✓ is terminal for that attempt).
+ *   monotonic (once verified, Live ✓ is terminal for that attempt);
+ * - verification also proves that every rendition the previous succeeded
+ *   publication served, and this one no longer has, answers 404 (RC9 PREP-A).
  */
 import type { SqlDatabase, SqlExecutor } from '../lib/db.ts';
 import { FailClosedError } from '../lib/errors.ts';
 import type { ReleaseManifest } from '../lib/manifest.ts';
-import type { RenditionPlacement } from './placements.ts';
+import { placementsFromSnapshot, removedPlacements, sha256Hex, type RenditionPlacement } from './placements.ts';
 import {
   IndeterminateDeploymentError,
   type CurrentPublicDeployment,
@@ -33,7 +35,9 @@ import {
   ensureControlRow,
   findJob,
   findLatestSucceeded,
+  findPublication,
   findStartedEvent,
+  findSucceededBefore,
   findTerminalEvent,
   findUnresolvedStartedAttempt,
   hasProviderVersionHistory,
@@ -255,12 +259,48 @@ export interface VerifyExpectation {
   readonly placements: readonly RenditionPlacement[];
   /** Non-image bundle files whose served bytes must equal the built bundle. */
   readonly files: readonly { readonly path: string; readonly sha256: string }[];
+  /** The live publication this attempt replaced, as sealed by select; null when select found none. */
+  readonly previousLive: PreviousLiveEvidence | null;
+}
+
+/** The previous succeeded attempt's identity and its exact snapshot bytes (read from R2 by select). */
+export interface PreviousLiveEvidence {
+  readonly attemptId: string;
+  readonly publicationId: string;
+  readonly providerVersionId: string;
+  readonly snapshotSha256: string;
+  readonly snapshot: Uint8Array;
 }
 
 export type VerifyOutcome = 'verified' | 'unverified' | 'already_verified' | 'not_succeeded';
 
+/**
+ * Binds the sealed previous-live evidence to the ledger (the succeeded event
+ * immediately before this attempt's, and that publication's content hash)
+ * and returns the renditions it served that this publication no longer has.
+ * Any doubt about the base is a failure class, never an empty removal set.
+ */
+export async function removedSincePreviousLive(db: SqlDatabase, expect: VerifyExpectation, terminalEventId: string): Promise<{ failure: string } | { removed: RenditionPlacement[] }> {
+  const previous = expect.previousLive;
+  const base = await findSucceededBefore(db, terminalEventId);
+  if (previous === null || base === null) return { failure: 'previous_live_base_missing' };
+  if (base.attemptId !== previous.attemptId || base.publicationId !== previous.publicationId || base.providerVersionId !== previous.providerVersionId) {
+    return { failure: 'previous_live_base_mismatch' };
+  }
+  const publication = await findPublication(db, base.publicationId);
+  if (publication === null || publication.contentHash !== previous.snapshotSha256 || sha256Hex(previous.snapshot) !== publication.contentHash) {
+    return { failure: 'previous_live_evidence_invalid' };
+  }
+  try {
+    return { removed: removedPlacements(placementsFromSnapshot(previous.snapshot), expect.placements) };
+  } catch (error) {
+    if (error instanceof FailClosedError) return { failure: 'previous_live_evidence_invalid' };
+    throw error;
+  }
+}
+
 /** One read-only pass; returns null when everything is proven, else the first failure class. */
-export async function verifyOnce(deps: VerifyDeps, expect: VerifyExpectation, providerVersionId: string): Promise<string | null> {
+export async function verifyOnce(deps: VerifyDeps, expect: VerifyExpectation, providerVersionId: string, removed: readonly RenditionPlacement[]): Promise<string | null> {
   const latest = await findLatestSucceeded(deps.db);
   if (latest === null || latest.attemptId !== expect.attemptId) return 'not_latest_succeeded';
   const current = await deps.currentDeployment();
@@ -278,6 +318,12 @@ export async function verifyOnce(deps: VerifyDeps, expect: VerifyExpectation, pr
     const response = await deps.fetch(`${deps.origin}/${route}`);
     if (response.status !== 200 || deps.sha256(response.body) !== file.sha256) return 'bundle_file_mismatch';
   }
+  // Removed content must be absent under the same contract the random probe proves: 404, never old bytes.
+  for (const gone of removed) {
+    const response = await deps.fetch(`${deps.origin}/${gone.publicPath}`);
+    if (deps.sha256(response.body) === gone.sha256) return 'removed_content_still_served';
+    if (response.status !== 404) return 'removed_path_not_absent';
+  }
   const missing = await deps.fetch(`${deps.origin}/${deps.notFoundProbePath}`);
   if (missing.status !== 404) return 'spa_fallback_answers_missing_file';
   return null;
@@ -291,9 +337,11 @@ export async function runVerify(deps: VerifyDeps, expect: VerifyExpectation): Pr
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const deadline = now() + (deps.windowMs ?? 5 * 60_000);
-  let failure: string | null = 'not_checked';
-  for (;;) {
-    failure = await verifyOnce(deps, expect, terminal.providerVersionId);
+  const base = await removedSincePreviousLive(deps.db, expect, terminal.id);
+  let failure: string | null = 'failure' in base ? base.failure : 'not_checked';
+  // An untrustworthy base cannot improve by polling: record it at once.
+  while ('removed' in base) {
+    failure = await verifyOnce(deps, expect, terminal.providerVersionId, base.removed);
     if (failure === null) break;
     if (now() + (deps.intervalMs ?? 15_000) > deadline) break;
     await sleep(deps.intervalMs ?? 15_000);
