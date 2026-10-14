@@ -1,0 +1,10 @@
+{
+  "schema": "fine-elements-release-manifest/1",
+  "target": "test",
+  "sequence": 1,
+  "source_repository": "gaimeore/fine-elements",
+  "source_commit": "1e1e418e4a638f29519650995f25049b1cfc2d37",
+  "source_archive_sha256": "2f9ffc0cbd0efafdf84f80fb10d37d57233d6ef50b33a9f7622ee30a3f1755ad",
+  "previous_source_commit": null,
+  "migration_ceiling": "0011_live_catalogue_control"
+}
