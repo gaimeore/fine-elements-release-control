@@ -58,6 +58,19 @@ const COMMON = [
   '--env', 'HOME=/tmp',
 ] as const;
 
+/**
+ * The only writable scratch inside the read-only modules bind (RC9 C1): Vite's
+ * config loader writes its bundled config to node_modules/.vite-temp. The
+ * wrapper pre-creates the mountpoint; the tmpfs is small, noexec and empty.
+ */
+export const VITE_TEMP_DIR = '.vite-temp';
+
+/** Every tmpfs a vector may carry, exactly, per phase. */
+const TMPFS_ALLOWED: Readonly<Record<'dependency' | 'build', readonly string[]>> = {
+  dependency: ['/tmp:rw,nosuid,nodev,size=512m'],
+  build: ['/tmp:rw,nosuid,nodev,size=1g', '/work:rw,nosuid,nodev,size=2g,mode=1777', `/in/node_modules/${VITE_TEMP_DIR}:rw,nosuid,nodev,noexec,size=64m,mode=1777`],
+};
+
 /** Phase 1: networked, source-less, scripts disabled. */
 export function dependencyPhaseArgs(input: { readonly image: string; readonly depsDir: string; readonly name: string }): string[] {
   return [
@@ -100,6 +113,7 @@ export function buildPhaseArgs(input: {
     '--tmpfs', '/tmp:rw,nosuid,nodev,size=1g',
     // A tmpfs on a path absent from the image is created root-owned 0755; the build user needs to write /work.
     '--tmpfs', '/work:rw,nosuid,nodev,size=2g,mode=1777',
+    '--tmpfs', `/in/node_modules/${VITE_TEMP_DIR}:rw,nosuid,nodev,noexec,size=64m,mode=1777`,
     '--mount', `type=bind,src=${input.srcDir},dst=/in/src,readonly`,
     '--mount', `type=bind,src=${input.modulesDir},dst=/in/node_modules,readonly`,
     '--mount', `type=bind,src=${input.snapshotDir},dst=/in/snapshot,readonly`,
@@ -114,7 +128,7 @@ export function buildPhaseArgs(input: {
 const FORBIDDEN_TOKENS = new Set(['-t', '--tty', '-i', '--interactive', '--init', 'host', '--network=host', '--privileged', '--cap-add', '--env-file', '--volume', '-v']);
 const FORBIDDEN_FRAGMENTS = ['docker.sock', 'containerd', 'GITHUB_', 'ACTIONS_', 'RUNNER_', '/var/run', '/proc'];
 /** Namespace-sharing flags in any form, and joined '--flag=value' forms of the pinned security flags (which would dodge the sequence checks). */
-const FORBIDDEN_FLAG = /^--(pid|uts|userns)(=|$)|^--(network|net|ipc|cgroupns|user|cap-drop|cap-add|security-opt|log-driver|mount|env|ulimit|read-only)=/;
+const FORBIDDEN_FLAG = /^--(pid|uts|userns)(=|$)|^--(network|net|ipc|cgroupns|user|cap-drop|cap-add|security-opt|log-driver|mount|env|ulimit|read-only|tmpfs)=/;
 /** Every bind source lives under the wrapper-owned root, never a runner or home directory. */
 export const SANDBOX_ROOT = '/fe/';
 
@@ -135,6 +149,9 @@ export function assertSandboxInvariants(args: readonly string[], phase: 'depende
     if (FORBIDDEN_TOKENS.has(arg) || FORBIDDEN_FLAG.test(arg) || FORBIDDEN_FRAGMENTS.some((fragment) => arg.includes(fragment))) {
       throw new FailClosedError('sandbox vector contains a forbidden element');
     }
+  }
+  for (const tmpfs of args.flatMap((arg, i) => (args[i - 1] === '--tmpfs' ? [arg] : []))) {
+    if (!TMPFS_ALLOWED[phase].includes(tmpfs)) throw new FailClosedError('sandbox tmpfs mount is not allowlisted');
   }
   const envs = args.flatMap((arg, i) => (args[i - 1] === '--env' ? [arg] : []));
   for (const env of envs) {
