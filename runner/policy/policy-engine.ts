@@ -205,6 +205,8 @@ const SANDBOX_REQUIRED = [
   "'--cgroupns', 'private',",
   "'npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund',",
   "SANDBOX_UID = '10001:10001'",
+  // RC9 C1: every tmpfs (including the Vite temp scratch) is an exact per-phase allowlist entry.
+  "if (!TMPFS_ALLOWED[phase].includes(tmpfs)) throw new FailClosedError('sandbox tmpfs mount is not allowlisted');",
   "'exec </dev/null >/out/.build.log 2>&1;',",
 ];
 
@@ -218,6 +220,8 @@ export function lintBuildWrapper(file: string, text: string): Finding[] {
     "assertSandboxInvariants(depsArgs, 'dependency')", "assertSandboxInvariants(buildArgs, 'build')", "stdio: ['ignore', fd, fd]",
     // the build is time-bounded, and the container is force-removed right after the bound
     "host.run('timeout', ['--kill-after=15s', '1200', 'docker', ...buildArgs]", "host.run('docker', ['rm', '-f', 'fe-build']",
+    // RC9 C1: the Vite temp mountpoint is created by the checked helper, never ad hoc
+    "await prepareViteTempMountpoint(`${dirs.deps}/node_modules`, host, `${dirs.log}/host.log`);",
   ]) {
     if (!text.includes(needle)) findings.push({ rule: 'sandbox-template', path: file, detail: `missing ${needle}` });
   }

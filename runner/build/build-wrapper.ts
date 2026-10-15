@@ -10,7 +10,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -23,7 +23,7 @@ import { loadRecipientTable, readHandoff, recipientsFor, writeHandoff } from '..
 import { readTar } from '../lib/tar.ts';
 import { parseTarget, type Target } from '../lib/target-config.ts';
 import { packBundle, validateBundleTree, type BundleFile } from '../deploy/bundle.ts';
-import { assertSandboxInvariants, buildPhaseArgs, dependencyPhaseArgs, loadSandboxConfig, requireImage, type SandboxConfig } from './sandbox.ts';
+import { assertSandboxInvariants, buildPhaseArgs, dependencyPhaseArgs, loadSandboxConfig, requireImage, VITE_TEMP_DIR, type SandboxConfig } from './sandbox.ts';
 
 export interface BuildInput {
   readonly snapshot: Buffer;
@@ -118,6 +118,15 @@ export function tsxCliEntry(modulesDir: string): string {
   return bin.replace(/^\.\//, '');
 }
 
+/** Creates the build phase's Vite temp mountpoint (RC9 C1); refuses if the dependency tree already has any entry there. */
+export async function prepareViteTempMountpoint(modulesDir: string, host: HostCommand, logFile: string): Promise<void> {
+  const target = `${modulesDir}/${VITE_TEMP_DIR}`;
+  let present = true;
+  try { lstatSync(target); } catch { present = false; }
+  if (present) throw new FailClosedError('dependency tree already contains .vite-temp');
+  if (await host.run('sudo', ['install', '-d', '-m', '0755', target], logFile) !== 0) throw new FailClosedError('vite temp mountpoint could not be created');
+}
+
 export interface HostCommand {
   /** Runs a host command with stdio to a host-owned log file only. Returns the exit code. */
   run(command: string, args: readonly string[], logFile: string): Promise<number>;
@@ -171,6 +180,7 @@ export async function runSandboxBuild(input: {
     assertSandboxInvariants(depsArgs, 'dependency');
     if (await host.run('docker', depsArgs, `${dirs.log}/deps.log`) !== 0) throw new FailClosedError('dependency phase failed');
     await host.run('docker', ['rm', '-f', 'fe-deps'], `${dirs.log}/host.log`);
+    await prepareViteTempMountpoint(`${dirs.deps}/node_modules`, host, `${dirs.log}/host.log`);
 
     mkdirSync(dirs.snapshot, { recursive: true, mode: 0o755 });
     writeFileSync(`${dirs.snapshot}/snapshot.json`, input.build.snapshot, { mode: 0o644 });
