@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
 
-import { assertNodeMajor, extractSource, NODE_MAJOR_EXCEPTION, parseBuildInput, prepareDependencyInputs, runSandboxBuild, tsxCliEntry, type HostCommand, type SourceIdentity } from '../runner/build/build-wrapper.ts';
+import { assertNodeMajor, extractSource, NODE_MAJOR_EXCEPTION, parseBuildInput, prepareDependencyInputs, prepareViteTempMountpoint, runSandboxBuild, tsxCliEntry, type HostCommand, type SourceIdentity } from '../runner/build/build-wrapper.ts';
 import { RC7_CANDIDATE_IMAGE, RC7_CONFIG, syntheticSource, tarOf } from '../runner/build/rc7-canary.ts';
 import { assertSandboxInvariants, buildPhaseArgs, dependencyPhaseArgs, loadSandboxConfig, parseSandboxConfig, requireImage, type SandboxConfig } from '../runner/build/sandbox.ts';
 import { packBundle, unpackBundle, validateBundleTree } from '../runner/deploy/bundle.ts';
@@ -29,6 +29,7 @@ const write = (root: string, rel: string, data: string | Buffer): void => {
 const sha = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
 const IMAGE = `docker.io/library/node@sha256:${'a'.repeat(64)}`;
 const SNAP = 'b'.repeat(64);
+const VITE_TMPFS = '/in/node_modules/.vite-temp:rw,nosuid,nodev,noexec,size=64m,mode=1777';
 
 function buildArgs(overrides: Partial<Parameters<typeof buildPhaseArgs>[0]> = {}): string[] {
   return buildPhaseArgs({ image: IMAGE, name: 'fe-build', srcDir: '/fe/src', modulesDir: '/fe/deps/node_modules', snapshotDir: '/fe/snapshot', outDir: '/fe/out', snapshotSha256: SNAP, tsxCli: 'dist/cli.mjs', ...overrides });
@@ -74,9 +75,28 @@ describe('sandbox vectors', () => {
       ['userns host', [...base.slice(0, 1), '--userns', 'host', ...base.slice(1)]],
       ['joined network', [...base.slice(0, 1), '--network=bridge', ...base.slice(1)]],
       ['joined cap-add', [...base.slice(0, 1), '--cap-add=SYS_ADMIN', ...base.slice(1)]],
+      ['vite tmpfs executable', base.map((a) => (a === VITE_TMPFS ? a.replace(',noexec', '') : a))],
+      ['vite tmpfs larger', base.map((a) => (a === VITE_TMPFS ? a.replace('size=64m', 'size=1g') : a))],
+      ['vite tmpfs suid', base.map((a) => (a === VITE_TMPFS ? a.replace('nosuid,', '') : a))],
+      ['tmpfs over all modules', base.map((a) => (a === VITE_TMPFS ? '/in/node_modules:rw,nosuid,nodev,noexec,size=64m,mode=1777' : a))],
+      ['tmpfs over source', base.map((a) => (a === VITE_TMPFS ? '/in/src/.vite-temp:rw,nosuid,nodev,noexec,size=64m,mode=1777' : a))],
+      ['extra tmpfs', [...base.slice(0, 1), '--tmpfs', '/in/snapshot/x:rw', ...base.slice(1)]],
+      ['joined tmpfs', [...base.slice(0, 1), `--tmpfs=${VITE_TMPFS}`, ...base.slice(1)]],
+      ['tmpfs as mount', [...base.slice(0, 1), '--mount', 'type=tmpfs,dst=/in/node_modules/.vite-temp', ...base.slice(1)]],
     ];
     for (const [name, args] of variants) assert.throws(() => assertSandboxInvariants(args, 'build'), Error, name);
     assert.throws(() => assertSandboxInvariants(dependencyPhaseArgs({ image: IMAGE, depsDir: '/fe/deps', name: 'd' }).filter((a) => a !== '--ignore-scripts'), 'dependency'), /lifecycle/);
+    const deps = dependencyPhaseArgs({ image: IMAGE, depsDir: '/fe/deps', name: 'd' });
+    assert.throws(() => assertSandboxInvariants([...deps.slice(0, 1), '--tmpfs', VITE_TMPFS, ...deps.slice(1)], 'dependency'), /not allowlisted/, 'the Vite scratch exists only in the build phase');
+  });
+
+  test('the build phase carries exactly one Vite temp tmpfs, inside the read-only modules bind (RC9 C1)', () => {
+    const args = buildArgs();
+    assert.equal(args.filter((a) => a === VITE_TMPFS).length, 1);
+    assert.equal(args[args.indexOf(VITE_TMPFS) - 1], '--tmpfs');
+    assert.deepEqual(args.flatMap((a, i) => (args[i - 1] === '--tmpfs' ? [a.split(':')[0]] : [])), ['/tmp', '/work', '/in/node_modules/.vite-temp']);
+    assert.ok(args.includes('type=bind,src=/fe/deps/node_modules,dst=/in/node_modules,readonly'), 'the modules bind itself stays read-only');
+    assert.ok(args.some((a, i) => a === '--network' && args[i + 1] === 'none'), 'still networkless');
   });
 
   test('runSandboxBuild never logs into a directory that does not exist yet (RC7 canary regression)', async () => {
@@ -109,6 +129,26 @@ describe('sandbox vectors', () => {
 });
 
 describe('build wrapper host-side steps (data only)', () => {
+  test('the Vite temp mountpoint is created only where nothing exists yet (RC9 C1)', async () => {
+    const calls: string[][] = [];
+    const host = (code: number): HostCommand => ({ run: async (command, args) => { calls.push([command, ...args]); return code; } });
+    const fresh = dir('vite-fresh/node_modules');
+    await prepareViteTempMountpoint(fresh, host(0), '/dev/null');
+    assert.deepEqual(calls.at(-1), ['sudo', 'install', '-d', '-m', '0755', `${fresh}/.vite-temp`]);
+    await assert.rejects(prepareViteTempMountpoint(dir('vite-fail/node_modules'), host(1), '/dev/null'), /could not be created/);
+    const asDir = dir('vite-dir/node_modules');
+    mkdirSync(path.join(asDir, '.vite-temp'));
+    const asFile = dir('vite-file/node_modules');
+    write(asFile, '.vite-temp', 'x');
+    const asLink = dir('vite-link/node_modules');
+    symlinkSync(path.join(scratch, 'nowhere'), path.join(asLink, '.vite-temp'), 'junction');
+    const before = calls.length;
+    for (const modules of [asDir, asFile, asLink]) {
+      await assert.rejects(prepareViteTempMountpoint(modules, host(0), '/dev/null'), /already contains/, modules);
+    }
+    assert.equal(calls.length, before, 'nothing is created over a pre-existing entry');
+  });
+
   test('the verified archive is extracted as data; links and traversal fail closed', () => {
     const repo = dir('canary-repo');
     execFileSync('git', ['init', '-q', repo]);
