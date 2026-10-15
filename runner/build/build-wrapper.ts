@@ -55,10 +55,12 @@ export function extractSource(archive: Buffer, destination: string): void {
 /**
  * The ONE reviewed exception to exact-major equality (RC9 P1-scoped): TEST
  * release source 1e1e418 pins Node 20.11.0 with engines ">=20.11.0" and may
- * be built only on the accepted Node 22 image. Every field must match
- * exactly; any other source, archive, .nvmrc, engines or image stays exact.
+ * be built only for target test on the accepted Node 22 image. Every field
+ * must match exactly; any other target (or none), source, archive, .nvmrc,
+ * engines or image stays exact.
  */
 export const NODE_MAJOR_EXCEPTION = {
+  target: 'test',
   sourceCommit: '1e1e418e4a638f29519650995f25049b1cfc2d37',
   sourceArchiveSha256: '2f9ffc0cbd0efafdf84f80fb10d37d57233d6ef50b33a9f7622ee30a3f1755ad',
   nvmrc: '20.11.0\n',
@@ -67,10 +69,11 @@ export const NODE_MAJOR_EXCEPTION = {
   nodeMajor: 22,
 } as const;
 
-/** The verified source archive being built: its manifest commit and the SHA-256 of its exact bytes. */
+/** The verified source archive being built: its manifest commit, the SHA-256 of its exact bytes and the run's target (absent: no exception). */
 export interface SourceIdentity {
   readonly sourceCommit: string;
   readonly archiveSha256: string;
+  readonly target?: Target;
 }
 
 /** The source's pinned Node major must equal the sandbox image's, except for NODE_MAJOR_EXCEPTION. */
@@ -86,6 +89,7 @@ export function assertNodeMajor(srcDir: string, config: SandboxConfig, source: S
 
 function isNodeMajorException(srcDir: string, nvmrc: string, config: SandboxConfig, source: SourceIdentity): boolean {
   const exception = NODE_MAJOR_EXCEPTION;
+  if (source.target !== exception.target) return false;
   if (source.sourceCommit !== exception.sourceCommit || source.archiveSha256 !== exception.sourceArchiveSha256) return false;
   if (nvmrc !== exception.nvmrc || config.nodeImage !== exception.nodeImage || config.nodeMajor !== exception.nodeMajor) return false;
   try {
@@ -139,6 +143,8 @@ export async function runSandboxBuild(input: {
   readonly archive: Buffer;
   readonly build: BuildInput;
   readonly config: SandboxConfig;
+  /** The trusted FE_TARGET of this run; only needed for NODE_MAJOR_EXCEPTION. */
+  readonly target?: Target;
   readonly host?: HostCommand;
   readonly root?: string;
 }): Promise<SandboxBuildResult> {
@@ -157,7 +163,7 @@ export async function runSandboxBuild(input: {
     mkdirSync(dirs.log, { recursive: true, mode: 0o700 });
     extractSource(input.archive, dirs.src);
     // The identity is recomputed from the exact bytes extracted, never taken from a caller.
-    assertNodeMajor(dirs.src, input.config, { sourceCommit: input.build.sourceCommit, archiveSha256: createHash('sha256').update(input.archive).digest('hex') });
+    assertNodeMajor(dirs.src, input.config, { sourceCommit: input.build.sourceCommit, archiveSha256: createHash('sha256').update(input.archive).digest('hex'), target: input.target });
     prepareDependencyInputs(dirs.src, dirs.deps);
     await must('sudo', ['chown', '-R', '10001:10001', dirs.deps], 'dependency directory could not be prepared');
 
@@ -215,7 +221,7 @@ export async function main(env: NodeJS.ProcessEnv): Promise<void> {
 
   let result: SandboxBuildResult;
   try {
-    result = await runSandboxBuild({ archive, build, config });
+    result = await runSandboxBuild({ archive, build, config, target });
   } catch (error) {
     const log = (error as { log?: Buffer }).log;
     if (log !== undefined) writeHandoff('handoff/build-log.fehandoff', log, recipientsFor(recipients, target, ['audit']), buildContext(run, target, manifest, 'build', 'build-log'));

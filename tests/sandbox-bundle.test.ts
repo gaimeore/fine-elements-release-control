@@ -154,7 +154,7 @@ describe('build wrapper host-side steps (data only)', () => {
   test('Node major: exact equality stays the default; the one bound exception needs every field (RC9 P1-scoped)', () => {
     const E = NODE_MAJOR_EXCEPTION;
     const accepted = { schema: 'fe-sandbox/1', nodeImage: E.nodeImage, nodeMajor: E.nodeMajor } as const;
-    const bound = { sourceCommit: E.sourceCommit, archiveSha256: E.sourceArchiveSha256 };
+    const bound: SourceIdentity = { sourceCommit: E.sourceCommit, archiveSha256: E.sourceArchiveSha256, target: 'test' };
     let n = 0;
     const source = (nvmrc: string | null, pkg: string | null): string => {
       const src = dir(`node-major-${n += 1}`);
@@ -164,7 +164,8 @@ describe('build wrapper host-side steps (data only)', () => {
     };
     const engines = JSON.stringify({ name: 'x', engines: { node: '>=20.11.0' }, scripts: { build: 'vite build' } });
 
-    // The exception is consistent with the committed, accepted image; changing the image makes it inert.
+    // TEST only, and consistent with the committed, accepted image; changing the image makes it inert.
+    assert.equal(E.target, 'test');
     assert.equal(loadSandboxConfig().nodeImage, E.nodeImage);
     assert.equal(loadSandboxConfig().nodeMajor, E.nodeMajor);
 
@@ -175,6 +176,8 @@ describe('build wrapper host-side steps (data only)', () => {
 
     const otherImage = `docker.io/library/node@sha256:${'e'.repeat(64)}`;
     const refused: [string, string, string | null, SandboxConfig, SourceIdentity][] = [
+      ['target prod', '20.11.0\n', engines, accepted, { ...bound, target: 'prod' }],
+      ['target absent', '20.11.0\n', engines, accepted, { sourceCommit: E.sourceCommit, archiveSha256: E.sourceArchiveSha256 }],
       ['other commit', '20.11.0\n', engines, accepted, { ...bound, sourceCommit: 'f'.repeat(40) }],
       ['other archive bytes', '20.11.0\n', engines, accepted, { ...bound, archiveSha256: 'f'.repeat(64) }],
       ['.nvmrc without newline', '20.11.0', engines, accepted, bound],
@@ -210,11 +213,18 @@ describe('build wrapper host-side steps (data only)', () => {
       },
     };
     const snapshot = Buffer.from('{}');
-    // Same .nvmrc and engines as the exception and the exception's commit, but different archive bytes.
+    // Same target, .nvmrc and engines as the exception and the exception's commit, but different archive bytes.
     const archive = tarOf({ '.nvmrc': '20.11.0\n', 'package.json': JSON.stringify({ engines: { node: '>=20.11.0' } }), 'package-lock.json': '{}' });
     const build = { snapshot, snapshotSha256: sha(snapshot), sourceCommit: NODE_MAJOR_EXCEPTION.sourceCommit, manifestSequence: 1 };
-    await assert.rejects(runSandboxBuild({ archive, build, config: loadSandboxConfig(), host, root }), /does not match/);
+    await assert.rejects(runSandboxBuild({ archive, build, config: loadSandboxConfig(), target: 'test', host, root }), /does not match/);
     assert.ok(!commands.includes('docker'), 'refused before any container runs');
+  });
+
+  test('the trusted FE_TARGET is threaded from main into the Node-major check (RC9 R1)', () => {
+    const text = readFileSync('runner/build/build-wrapper.ts', 'utf8');
+    assert.ok(text.includes('const target = parseTarget(env.FE_TARGET);'), 'main parses the target');
+    assert.ok(text.includes('runSandboxBuild({ archive, build, config, target })'), 'main passes it to the sandbox build');
+    assert.ok(text.includes("digest('hex'), target: input.target });"), 'the sandbox build passes it to assertNodeMajor');
   });
 
   test('the build input is bound to the manifest and its snapshot digest', () => {
